@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Node = @import("node.zig").Node(std.heap.page_allocator);
 
 const Frequencies = std.StringHashMap(u32);
 
@@ -39,29 +38,61 @@ test "test frequencies" {
     try expect(total == s.len);
 }
 
-const math = std.math;
-const PriorityQueue = std.PriorityQueue;
+const TreeBuilder = struct {
+    allocator: Allocator,
+    const Self = @This();
 
-const CharAndPriority = struct { char: []const u8, priority: u32 };
-
-fn greather_than(ctx: void, a: CharAndPriority, b: CharAndPriority) math.Order {
-    _ = ctx;
-    return math.order(b.priority, a.priority);
-}
-
-const PQgt = PriorityQueue(CharAndPriority, void, greather_than);
-
-fn prioritize(allocator: Allocator, frequencies: *Frequencies) !PQgt {
-    var queue = PQgt.init(allocator, {});
-    var iter = frequencies.iterator();
-    while (iter.next()) |entry| {
-        try queue.add(.{
-            .char = entry.key_ptr.*,
-            .priority = entry.value_ptr.*,
-        });
+    fn init(allocator: Allocator) Self {
+        return .{ .allocator = allocator };
     }
-    return queue;
-}
+
+    const Node = @import("node.zig").Node;
+
+    fn buildTree(self: *const Self, s: []const u8) !*const Node {
+        var frequencies = try calculate_frequencies(self.allocator, s);
+        defer frequencies.deinit();
+
+        var queue = try self.prioritize(&frequencies);
+        defer queue.deinit();
+
+        while (queue.count() >= 2) {
+            const left = queue.remove();
+            const right = queue.remove();
+            const internal_node = try Node.internal(
+                self.allocator,
+                left.node,
+                right.node,
+            );
+            const priority = left.priority + right.priority;
+            try queue.add(.{ .node = internal_node, .priority = priority });
+        }
+
+        const root = queue.remove().node;
+        return root;
+    }
+
+    const NodeAndPriority = struct { node: *const Node, priority: u32 };
+
+    const math = std.math;
+    fn greather_than(ctx: void, a: NodeAndPriority, b: NodeAndPriority) math.Order {
+        _ = ctx;
+        return math.order(b.priority, a.priority);
+    }
+
+    const PQgt = std.PriorityQueue(NodeAndPriority, void, greather_than);
+
+    fn prioritize(self: *const Self, frequencies: *const Frequencies) !PQgt {
+        var queue = PQgt.init(self.allocator, {});
+        var iter = frequencies.iterator();
+        while (iter.next()) |entry| {
+            try queue.add(.{
+                .node = try Node.leaf(self.allocator, entry.key_ptr.*),
+                .priority = entry.value_ptr.*,
+            });
+        }
+        return queue;
+    }
+};
 
 test "test prioritize" {
     const testing = std.testing;
@@ -72,26 +103,43 @@ test "test prioritize" {
     var frequencies = try calculate_frequencies(allocator, s);
     defer frequencies.deinit();
 
-    var queue = try prioritize(allocator, &frequencies);
+    var queue = try TreeBuilder.init(allocator).prioritize(&frequencies);
     defer queue.deinit();
+    defer while (queue.removeOrNull()) |nap| {
+        nap.node.deinit(allocator);
+    };
 
     const stdout = std.io.getStdOut().writer();
     var it = queue.iterator();
     while (it.next()) |n| {
-        try stdout.print("{s} - {d}\n", .{ n.char, n.priority });
+        try stdout.print("{s} - {d}\n", .{ n.node, n.priority });
     }
 
     try testing.expectEqual(frequencies.count(), queue.count());
 
     var char_and_priority = queue.remove();
-    try testing.expectEqual(s.ptr + 2, char_and_priority.char.ptr);
-    try testing.expectEqualStrings("l", char_and_priority.char);
+    try testing.expectEqual(s.ptr + 2, char_and_priority.node.leaf.char.ptr);
+    try testing.expectEqualStrings("l", char_and_priority.node.leaf.char);
     try testing.expectEqual(3, char_and_priority.priority);
+    char_and_priority.node.deinit(allocator);
 
     char_and_priority = queue.remove();
-    try testing.expectEqualStrings("o", char_and_priority.char);
-    try testing.expectEqual(s.ptr + 4, char_and_priority.char.ptr);
+    try testing.expectEqual(s.ptr + 4, char_and_priority.node.leaf.char.ptr);
+    try testing.expectEqualStrings("o", char_and_priority.node.leaf.char);
     try testing.expectEqual(2, char_and_priority.priority);
+    char_and_priority.node.deinit(allocator);
 
     // ...
+}
+
+test "buildTree" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const s = "hello world";
+    const root = try TreeBuilder.init(allocator).buildTree(s);
+    defer root.deinit(allocator);
+
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("{s}", .{root});
 }
