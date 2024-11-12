@@ -18,6 +18,25 @@ pub fn deinit(self: *BitVec) void {
     self.* = undefined;
 }
 
+pub fn copy(self: *const BitVec, allocator: Allocator) !BitVec {
+    var new_bits = BitVec.init(allocator);
+    new_bits.bit_len = self.bit_len;
+    try new_bits.bytes.appendSlice(self.bytes.items);
+    return new_bits;
+}
+
+test "copy" {
+    var bits = try createTestBitVec();
+    defer bits.deinit();
+
+    var new = try bits.copy(testing.allocator);
+    defer new.deinit();
+
+    try new.push(0);
+    try testing.expectEqual(0, new.peek());
+    try testing.expectEqual(1, bits.peek());
+}
+
 pub fn push(self: *BitVec, b: u1) !void {
     const byte_idx = self.bit_len >> 3;
     if (self.bytes.items.len <= byte_idx) {
@@ -81,14 +100,14 @@ const Iterator = struct {
         };
     }
 
-    pub fn next(it: *Iterator) ?u1 {
-        const b = it.bit_vec.get(it.idx);
-        it.idx += 1;
+    pub fn next(self: *Iterator) ?u1 {
+        const b = self.bit_vec.get(self.idx);
+        self.idx += 1;
         return b;
     }
 
-    pub fn reset(it: *Iterator) void {
-        it.idx = 0;
+    pub fn reset(self: *Iterator) void {
+        self.idx = 0;
     }
 };
 

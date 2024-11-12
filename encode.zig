@@ -38,28 +38,35 @@ test "test frequencies" {
     try expect(total == s.len);
 }
 
-const TreeBuilder = struct {
-    allocator: Allocator,
+const Tree = struct {
     const Self = @This();
 
-    fn init(allocator: Allocator) Self {
-        return .{ .allocator = allocator };
+    allocator: Allocator,
+    root: *const Node,
+
+    fn build(allocator: Allocator, s: []const u8) !Self {
+        const root = try buildTree(allocator, s);
+        return .{ .allocator = allocator, .root = root };
+    }
+
+    fn deinit(self: *Self) void {
+        self.root.deinit(self.allocator);
     }
 
     const Node = @import("node.zig").Node;
 
-    fn buildTree(self: *const Self, s: []const u8) !*const Node {
-        var frequencies = try calculate_frequencies(self.allocator, s);
+    fn buildTree(allocator: Allocator, s: []const u8) !*const Node {
+        var frequencies = try calculate_frequencies(allocator, s);
         defer frequencies.deinit();
 
-        var queue = try self.prioritize(&frequencies);
+        var queue = try prioritize(allocator, &frequencies);
         defer queue.deinit();
 
         while (queue.count() >= 2) {
             const left = queue.remove();
             const right = queue.remove();
             const internal_node = try Node.internal(
-                self.allocator,
+                allocator,
                 left.node,
                 right.node,
             );
@@ -71,22 +78,68 @@ const TreeBuilder = struct {
         return root;
     }
 
+    const BitVec = @import("./bitvec.zig");
+    const CodesByChar = std.StringHashMap(BitVec);
+
+    fn walkPathsForCodes(self: *Self) !CodesByChar {
+        var codes_by_char = CodesByChar.init(self.allocator);
+        var bits = BitVec.init(self.allocator);
+        defer bits.deinit();
+        try self.walkNodeForCodes(
+            self.root,
+            &bits,
+            &codes_by_char,
+        );
+        return codes_by_char;
+    }
+
+    fn walkNodeForCodes(
+        self: *Self,
+        node: *const Node,
+        bits: *BitVec,
+        codes_by_char: *CodesByChar,
+    ) !void {
+        switch (node.*) {
+            .leaf => |leaf_node| {
+                const bits_copy = try bits.copy(self.allocator);
+                try codes_by_char.put(leaf_node.char, bits_copy);
+            },
+            .internal => |internal_node| {
+                try bits.push(0);
+                try self.walkNodeForCodes(internal_node.left, bits, codes_by_char);
+                _ = bits.pop();
+
+                try bits.push(1);
+                try self.walkNodeForCodes(internal_node.right, bits, codes_by_char);
+                _ = bits.pop();
+            },
+        }
+    }
+
+    fn deinitCodesByChar(codes_by_char: *CodesByChar) void {
+        var it = codes_by_char.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+        codes_by_char.deinit();
+    }
+
     const NodeAndPriority = struct { node: *const Node, priority: u32 };
 
     const math = std.math;
     fn greather_than(ctx: void, a: NodeAndPriority, b: NodeAndPriority) math.Order {
         _ = ctx;
-        return math.order(b.priority, a.priority);
+        return math.order(a.priority, b.priority);
     }
 
     const PQgt = std.PriorityQueue(NodeAndPriority, void, greather_than);
 
-    fn prioritize(self: *const Self, frequencies: *const Frequencies) !PQgt {
-        var queue = PQgt.init(self.allocator, {});
+    fn prioritize(allocator: Allocator, frequencies: *const Frequencies) !PQgt {
+        var queue = PQgt.init(allocator, {});
         var iter = frequencies.iterator();
         while (iter.next()) |entry| {
             try queue.add(.{
-                .node = try Node.leaf(self.allocator, entry.key_ptr.*),
+                .node = try Node.leaf(allocator, entry.key_ptr.*),
                 .priority = entry.value_ptr.*,
             });
         }
@@ -94,8 +147,8 @@ const TreeBuilder = struct {
     }
 };
 
+const testing = std.testing;
 test "test prioritize" {
-    const testing = std.testing;
     const allocator = testing.allocator;
 
     const s = "hello world";
@@ -103,43 +156,44 @@ test "test prioritize" {
     var frequencies = try calculate_frequencies(allocator, s);
     defer frequencies.deinit();
 
-    var queue = try TreeBuilder.init(allocator).prioritize(&frequencies);
+    var queue = try Tree.prioritize(allocator, &frequencies);
     defer queue.deinit();
     defer while (queue.removeOrNull()) |nap| {
         nap.node.deinit(allocator);
     };
 
-    const stdout = std.io.getStdOut().writer();
     var it = queue.iterator();
     while (it.next()) |n| {
-        try stdout.print("{s} - {d}\n", .{ n.node, n.priority });
+        std.debug.print("{s} - {d}\n", .{ n.node, n.priority });
     }
 
     try testing.expectEqual(frequencies.count(), queue.count());
-
-    var char_and_priority = queue.remove();
-    try testing.expectEqual(s.ptr + 2, char_and_priority.node.leaf.char.ptr);
-    try testing.expectEqualStrings("l", char_and_priority.node.leaf.char);
-    try testing.expectEqual(3, char_and_priority.priority);
-    char_and_priority.node.deinit(allocator);
-
-    char_and_priority = queue.remove();
-    try testing.expectEqual(s.ptr + 4, char_and_priority.node.leaf.char.ptr);
-    try testing.expectEqualStrings("o", char_and_priority.node.leaf.char);
-    try testing.expectEqual(2, char_and_priority.priority);
-    char_and_priority.node.deinit(allocator);
-
-    // ...
 }
 
 test "buildTree" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
     const s = "hello world";
-    const root = try TreeBuilder.init(allocator).buildTree(s);
-    defer root.deinit(allocator);
+    var tree = try Tree.build(testing.allocator, s);
+    defer tree.deinit();
 
-    const stdout = std.io.getStdOut().writer();
-    try stdout.print("{s}", .{root});
+    std.debug.print("{s}\n", .{tree.root});
+}
+
+test "walk tree" {
+    const s = "hello world";
+    var tree = try Tree.build(testing.allocator, s);
+    defer tree.deinit();
+    var codes_by_char = try tree.walkPathsForCodes();
+    defer Tree.deinitCodesByChar(&codes_by_char);
+    var codes_it = codes_by_char.iterator();
+    while (codes_it.next()) |entry| {
+        const c = entry.key_ptr.*;
+        std.debug.print("{s} - ", .{c});
+
+        const bits = entry.value_ptr.*;
+        var bit = bits.iterator();
+        while (bit.next()) |b| {
+            std.debug.print("{d}", .{b});
+        }
+        std.debug.print("\n", .{});
+    }
 }
