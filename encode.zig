@@ -1,14 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Frequencies = std.StringHashMap(u32);
+const Frequencies = std.AutoHashMap(u8, u32);
 
 fn calculate_frequencies(allocator: Allocator, s: []const u8) !Frequencies {
     var frequencies = Frequencies.init(allocator);
-    const view = try std.unicode.Utf8View.init(s);
-    var iterator = view.iterator();
-    while (iterator.nextCodepointSlice()) |slice| {
-        const result = try frequencies.getOrPut(slice);
+    for (s) |byte| {
+        const result = try frequencies.getOrPut(byte);
         if (!result.found_existing) {
             result.value_ptr.* = 0;
         }
@@ -79,7 +77,7 @@ const Tree = struct {
     }
 
     const BitVec = @import("./bitvec.zig");
-    const CodesByChar = std.StringHashMap(BitVec);
+    const CodesByChar = std.AutoHashMap(u8, BitVec);
 
     fn walkPathsForCodes(self: *Self) !CodesByChar {
         var codes_by_char = CodesByChar.init(self.allocator);
@@ -102,7 +100,7 @@ const Tree = struct {
         switch (node.*) {
             .leaf => |leaf_node| {
                 const bits_copy = try bits.copy(self.allocator);
-                try codes_by_char.put(leaf_node.char, bits_copy);
+                try codes_by_char.put(leaf_node.byte, bits_copy);
             },
             .internal => |internal_node| {
                 try bits.push(0);
@@ -187,7 +185,7 @@ test "walk tree" {
     var codes_it = codes_by_char.iterator();
     while (codes_it.next()) |entry| {
         const c = entry.key_ptr.*;
-        std.debug.print("{s} - ", .{c});
+        std.debug.print("{c} - ", .{c});
 
         const bits = entry.value_ptr.*;
         var bit = bits.iterator();

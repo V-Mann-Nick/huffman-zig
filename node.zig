@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const LeafNode = struct { char: []const u8 };
+const LeafNode = struct { byte: u8 };
 const InternalNode = struct { left: *const Node, right: *const Node };
 const NodeType = enum { leaf, internal };
 pub const Node = union(NodeType) {
@@ -10,9 +10,9 @@ pub const Node = union(NodeType) {
 
     const Self = @This();
 
-    pub fn leaf(allocator: Allocator, char: []const u8) !*const Self {
+    pub fn leaf(allocator: Allocator, byte: u8) !*const Self {
         const node = try allocator.create(Self);
-        node.* = Self{ .leaf = LeafNode{ .char = char } };
+        node.* = Self{ .leaf = LeafNode{ .byte = byte } };
         return node;
     }
 
@@ -48,7 +48,7 @@ pub const Node = union(NodeType) {
         switch (self) {
             .leaf => |leaf_node| {
                 try writer.writeAll("Leaf { ");
-                try writer.print("char: {s}", .{leaf_node.char});
+                try writer.print("byte: {d}", .{leaf_node.byte});
                 try writer.writeAll(" }");
             },
             .internal => |internal_node| {
@@ -63,39 +63,33 @@ pub const Node = union(NodeType) {
 
 test "Node" {
     const testing = std.testing;
-    const eql = std.mem.eql;
     const allocator = std.testing.allocator;
 
-    const c1 = "a";
-    const c2 = "b";
+    const c1: u8 = 'a';
+    const c2: u8 = 'b';
 
     const left = try Node.leaf(allocator, c1);
     const right = try Node.leaf(allocator, c2);
     const node = try Node.internal(allocator, left, right);
     defer node.deinit(allocator);
 
-    try testing.expect(eql(u8, node.internal.left.leaf.char, c1));
-    try testing.expect(c1.ptr == node.internal.left.leaf.char.ptr);
-    try testing.expect(eql(u8, node.internal.right.leaf.char, c2));
+    try testing.expectEqual(node.internal.left.leaf.byte, c1);
+    try testing.expectEqual(node.internal.right.leaf.byte, c2);
 }
 
 test "Node print" {
     const allocator = std.testing.allocator;
     const testing = std.testing;
 
-    const n1 = try Node.leaf(allocator, "a");
-    const n2 = try Node.leaf(allocator, "b");
+    const n1 = try Node.leaf(allocator, 'a');
+    const n2 = try Node.leaf(allocator, 'b');
     const n3 = try Node.internal(allocator, n1, n2);
     defer n3.deinit(allocator);
 
-    // const stdout = std.io.getStdOut().writer();
-    // try stdout.print("{s}\n", .{n3});
-
     const n3_string = try std.fmt.allocPrint(allocator, "{s}", .{n3});
     defer allocator.free(n3_string);
-    try testing.expect(std.mem.eql(
-        u8,
+    try testing.expectEqualStrings(
         n3_string,
-        "Internal { left: Leaf { char: a }, right: Leaf { char: b } }",
-    ));
+        "Internal { left: Leaf { byte: 97 }, right: Leaf { byte: 98 } }",
+    );
 }
