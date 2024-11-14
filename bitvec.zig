@@ -51,6 +51,15 @@ pub fn push(self: *BitVec, b: u1) !void {
     self.bit_len += 1;
 }
 
+pub fn pushByte(self: *BitVec, byte: u8) !void {
+    var i: u4 = 0;
+    while (i < 8) : (i += 1) {
+        const shift = @as(u3, @intCast(i));
+        const bit = @as(u1, @intCast((byte >> shift) & 1));
+        try self.push(bit);
+    }
+}
+
 pub fn get(self: *const BitVec, idx: usize) ?u1 {
     const byte_idx = idx >> 3;
 
@@ -140,6 +149,23 @@ test "push, peek & pop" {
     try testing.expectEqual(0, bits.pop());
 
     try testing.expectEqual(1, bits.peek());
+    try testing.expectEqual(1, bits.pop());
+}
+
+test "push byte" {
+    var bits = try createTestBitVec();
+    defer bits.deinit();
+
+    try bits.pushByte(0b11_01_01_11);
+
+    try testing.expectEqual(1, bits.pop());
+    try testing.expectEqual(1, bits.pop());
+    try testing.expectEqual(0, bits.pop());
+    try testing.expectEqual(1, bits.pop());
+    try testing.expectEqual(0, bits.pop());
+    try testing.expectEqual(1, bits.pop());
+    try testing.expectEqual(1, bits.pop());
+    try testing.expectEqual(1, bits.pop());
     try testing.expectEqual(1, bits.pop());
 }
 

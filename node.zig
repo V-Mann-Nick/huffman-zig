@@ -48,7 +48,7 @@ pub const Node = union(NodeType) {
         switch (self) {
             .leaf => |leaf_node| {
                 try writer.writeAll("Leaf { ");
-                try writer.print("byte: {d}", .{leaf_node.byte});
+                try writer.print("byte: {c}", .{leaf_node.byte});
                 try writer.writeAll(" }");
             },
             .internal => |internal_node| {
@@ -90,6 +90,6 @@ test "Node print" {
     defer allocator.free(n3_string);
     try testing.expectEqualStrings(
         n3_string,
-        "Internal { left: Leaf { byte: 97 }, right: Leaf { byte: 98 } }",
+        "Internal { left: Leaf { byte: a }, right: Leaf { byte: b } }",
     );
 }
