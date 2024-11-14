@@ -1,19 +1,49 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
-const Frequencies = std.AutoHashMap(u8, u32);
+const Node = @import("node.zig").Node;
+const BitVec = @import("./bitvec.zig");
 
-pub fn encode(allocator: Allocator, s: []const u8) !Tree.BitVec {
-    var tree = try Tree.build(allocator, s);
-    defer tree.deinit();
-    var bits = Tree.BitVec.init(allocator);
-    try tree.serializeTree(&bits);
-    try tree.encodeBytes(s, &bits);
+// The tree for the input "hello world" would look like this:
+//
+//                     [Internal]
+//                   /           \
+//          [Internal]           [Internal]
+//          /        \           /         \
+//     [Internal]   [Internal]  'l'       [Internal]
+//     /      \      /     \              /       \
+//   'd'     'h'   'e'    'w'          'o'       [Internal]
+//                                               /       \
+//       ===========================           ' '       'r'
+//       |    "hello world" tree   |
+//       ===========================
+//
+const test_input = "hello world";
+
+const Self = @This();
+
+input: []const u8,
+allocator: Allocator,
+
+pub fn init(allocator: Allocator, input: []const u8) Self {
+    return .{ .allocator = allocator, .input = input };
+}
+
+pub fn encode(self: *Self) !BitVec {
+    var root = try self.buildTree();
+    defer root.deinit(self.allocator);
+
+    var bits = BitVec.init(self.allocator);
+    try serializeTree(root, &bits);
+    try self.encodeBytes(root, &bits);
+
     return bits;
 }
 
 test "encode" {
-    var bits = try encode(testing.allocator, "hello world");
+    var encoder = Self.init(testing.allocator, test_input);
+    var bits = try encoder.encode();
     defer bits.deinit();
 
     var it = bits.iterator();
@@ -23,9 +53,42 @@ test "encode" {
     std.debug.print("\n", .{});
 }
 
-fn calculate_frequencies(allocator: Allocator, s: []const u8) !Frequencies {
-    var frequencies = Frequencies.init(allocator);
-    for (s) |byte| {
+fn buildTree(self: *Self) !*const Node {
+    var frequencies = try self.calculate_frequencies();
+    defer frequencies.deinit();
+
+    var queue = try self.prioritize(&frequencies);
+    defer queue.deinit();
+
+    while (queue.count() >= 2) {
+        const left = queue.remove();
+        const right = queue.remove();
+        const internal_node = try Node.internal(
+            self.allocator,
+            left.node,
+            right.node,
+        );
+        const priority = left.priority + right.priority;
+        try queue.add(.{ .node = internal_node, .priority = priority });
+    }
+
+    const root = queue.remove().node;
+    return root;
+}
+
+test "buildTree" {
+    var encoder = Self.init(testing.allocator, test_input);
+    var root = try encoder.buildTree();
+    defer root.deinit(testing.allocator);
+
+    std.debug.print("{s}\n", .{root});
+}
+
+const Frequencies = std.AutoHashMap(u8, u32);
+
+fn calculate_frequencies(self: *Self) !Frequencies {
+    var frequencies = Frequencies.init(self.allocator);
+    for (self.input) |byte| {
         const result = try frequencies.getOrPut(byte);
         if (!result.found_existing) {
             result.value_ptr.* = 0;
@@ -36,15 +99,13 @@ fn calculate_frequencies(allocator: Allocator, s: []const u8) !Frequencies {
 }
 
 test "test frequencies" {
-    const expect = std.testing.expect;
     const allocator = std.testing.allocator;
 
-    const s = "hello world";
-
-    var frequencies = try calculate_frequencies(allocator, s);
+    var encoder = Self.init(allocator, test_input);
+    var frequencies = try encoder.calculate_frequencies();
     defer frequencies.deinit();
 
-    try expect(frequencies.count() == 8);
+    try testing.expectEqual(8, frequencies.count());
 
     var total: u32 = 0;
     var iterator = frequencies.iterator();
@@ -53,156 +114,40 @@ test "test frequencies" {
         total += count;
     }
 
-    try expect(total == s.len);
+    try testing.expectEqual(total, test_input.len);
 }
 
-const Tree = struct {
-    const Self = @This();
+const NodeAndPriority = struct { node: *const Node, priority: u32 };
 
-    allocator: Allocator,
-    root: *const Node,
+const math = std.math;
+fn greather_than(ctx: void, a: NodeAndPriority, b: NodeAndPriority) math.Order {
+    _ = ctx;
+    return math.order(a.priority, b.priority);
+}
 
-    fn build(allocator: Allocator, s: []const u8) !Self {
-        const root = try buildTree(allocator, s);
-        return .{ .allocator = allocator, .root = root };
+const PQgt = std.PriorityQueue(NodeAndPriority, void, greather_than);
+
+fn prioritize(self: *Self, frequencies: *const Frequencies) !PQgt {
+    var queue = PQgt.init(self.allocator, {});
+    var iter = frequencies.iterator();
+    while (iter.next()) |entry| {
+        try queue.add(.{
+            .node = try Node.leaf(self.allocator, entry.key_ptr.*),
+            .priority = entry.value_ptr.*,
+        });
     }
+    return queue;
+}
 
-    fn deinit(self: *Self) void {
-        self.root.deinit(self.allocator);
-    }
-
-    const Node = @import("node.zig").Node;
-
-    fn buildTree(allocator: Allocator, s: []const u8) !*const Node {
-        var frequencies = try calculate_frequencies(allocator, s);
-        defer frequencies.deinit();
-
-        var queue = try prioritize(allocator, &frequencies);
-        defer queue.deinit();
-
-        while (queue.count() >= 2) {
-            const left = queue.remove();
-            const right = queue.remove();
-            const internal_node = try Node.internal(
-                allocator,
-                left.node,
-                right.node,
-            );
-            const priority = left.priority + right.priority;
-            try queue.add(.{ .node = internal_node, .priority = priority });
-        }
-
-        const root = queue.remove().node;
-        return root;
-    }
-
-    fn serializeTree(self: *Self, bits: *BitVec) !void {
-        try serializeNode(self.root, bits);
-    }
-
-    fn serializeNode(node: *const Node, bits: *BitVec) !void {
-        switch (node.*) {
-            .leaf => |leaf_node| {
-                try bits.push(1);
-                try bits.pushByte(leaf_node.byte);
-            },
-            .internal => |internal_node| {
-                try bits.push(0);
-                try serializeNode(internal_node.left, bits);
-                try serializeNode(internal_node.right, bits);
-            },
-        }
-    }
-
-    fn encodeBytes(self: *Self, s: []const u8, bits: *BitVec) !void {
-        var codes_by_char = try self.walkPathsForCodes();
-        defer deinitCodesByChar(&codes_by_char);
-
-        for (s) |byte| {
-            const char_bits = codes_by_char.get(byte).?;
-            try bits.append(&char_bits);
-        }
-    }
-
-    const BitVec = @import("./bitvec.zig");
-    const CodesByChar = std.AutoHashMap(u8, BitVec);
-
-    fn walkPathsForCodes(self: *Self) !CodesByChar {
-        var codes_by_char = CodesByChar.init(self.allocator);
-        var bits = BitVec.init(self.allocator);
-        defer bits.deinit();
-        try self.walkNodeForCodes(
-            self.root,
-            &bits,
-            &codes_by_char,
-        );
-        return codes_by_char;
-    }
-
-    fn walkNodeForCodes(
-        self: *Self,
-        node: *const Node,
-        bits: *BitVec,
-        codes_by_char: *CodesByChar,
-    ) !void {
-        switch (node.*) {
-            .leaf => |leaf_node| {
-                const bits_copy = try bits.copy(self.allocator);
-                try codes_by_char.put(leaf_node.byte, bits_copy);
-            },
-            .internal => |internal_node| {
-                try bits.push(0);
-                try self.walkNodeForCodes(internal_node.left, bits, codes_by_char);
-                _ = bits.pop();
-
-                try bits.push(1);
-                try self.walkNodeForCodes(internal_node.right, bits, codes_by_char);
-                _ = bits.pop();
-            },
-        }
-    }
-
-    fn deinitCodesByChar(codes_by_char: *CodesByChar) void {
-        var it = codes_by_char.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.*.deinit();
-        }
-        codes_by_char.deinit();
-    }
-
-    const NodeAndPriority = struct { node: *const Node, priority: u32 };
-
-    const math = std.math;
-    fn greather_than(ctx: void, a: NodeAndPriority, b: NodeAndPriority) math.Order {
-        _ = ctx;
-        return math.order(a.priority, b.priority);
-    }
-
-    const PQgt = std.PriorityQueue(NodeAndPriority, void, greather_than);
-
-    fn prioritize(allocator: Allocator, frequencies: *const Frequencies) !PQgt {
-        var queue = PQgt.init(allocator, {});
-        var iter = frequencies.iterator();
-        while (iter.next()) |entry| {
-            try queue.add(.{
-                .node = try Node.leaf(allocator, entry.key_ptr.*),
-                .priority = entry.value_ptr.*,
-            });
-        }
-        return queue;
-    }
-};
-
-const testing = std.testing;
 test "test prioritize" {
     const allocator = testing.allocator;
 
-    const s = "hello world";
+    var encoder = Self.init(allocator, test_input);
 
-    var frequencies = try calculate_frequencies(allocator, s);
+    var frequencies = try encoder.calculate_frequencies();
     defer frequencies.deinit();
 
-    var queue = try Tree.prioritize(allocator, &frequencies);
+    var queue = try encoder.prioritize(&frequencies);
     defer queue.deinit();
     defer while (queue.removeOrNull()) |nap| {
         nap.node.deinit(allocator);
@@ -216,33 +161,31 @@ test "test prioritize" {
     try testing.expectEqual(frequencies.count(), queue.count());
 }
 
-test "buildTree" {
-    const s = "hello world";
-    var tree = try Tree.build(testing.allocator, s);
-    defer tree.deinit();
-
-    std.debug.print("{s}\n", .{tree.root});
+fn serializeTree(root: *const Node, bits: *BitVec) !void {
+    try serializeNode(root, bits);
 }
 
-//                     [Internal]
-//                   /           \
-//          [Internal]           [Internal]
-//          /        \           /         \
-//     [Internal]   [Internal]  'l'       [Internal]
-//     /      \      /     \              /       \
-//   'd'     'h'   'e'    'w'          'o'       [Internal]
-//                                               /       \
-//       ===========================           ' '       'r'
-//       |    "hello world" tree   |
-//       ===========================
+fn serializeNode(node: *const Node, bits: *BitVec) !void {
+    switch (node.*) {
+        .leaf => |leaf_node| {
+            try bits.push(1);
+            try bits.pushByte(leaf_node.byte);
+        },
+        .internal => |internal_node| {
+            try bits.push(0);
+            try serializeNode(internal_node.left, bits);
+            try serializeNode(internal_node.right, bits);
+        },
+    }
+}
 
 test "serialize tree" {
-    const s = "hello world";
-    var tree = try Tree.build(testing.allocator, s);
-    defer tree.deinit();
+    var encoder = Self.init(testing.allocator, test_input);
+    var root = try encoder.buildTree();
+    defer root.deinit(testing.allocator);
 
-    var bits = Tree.BitVec.init(testing.allocator);
-    try tree.serializeTree(&bits);
+    var bits = BitVec.init(testing.allocator);
+    try serializeTree(root, &bits);
     defer bits.deinit();
 
     var it = bits.iterator();
@@ -252,16 +195,88 @@ test "serialize tree" {
     std.debug.print("\n", .{});
 }
 
+fn encodeBytes(self: *Self, root: *const Node, bits: *BitVec) !void {
+    var codes_by_char = try self.walkPathsForCodes(root);
+    defer deinitCodesByChar(&codes_by_char);
+
+    for (self.input) |byte| {
+        const char_bits = codes_by_char.get(byte).?;
+        try bits.append(&char_bits);
+    }
+}
+
+test "encode bytes" {
+    var encoder = Self.init(testing.allocator, test_input);
+    var root = try encoder.buildTree();
+    defer root.deinit(testing.allocator);
+
+    var bits = BitVec.init(testing.allocator);
+    defer bits.deinit();
+    try encoder.encodeBytes(root, &bits);
+    var bit = bits.iterator();
+    while (bit.next()) |b| {
+        std.debug.print("{d}", .{b});
+    }
+    std.debug.print("\n", .{});
+}
+
+const CodesByChar = std.AutoHashMap(u8, BitVec);
+
+fn walkPathsForCodes(self: *Self, root: *const Node) !CodesByChar {
+    var codes_by_char = CodesByChar.init(self.allocator);
+    var bits = BitVec.init(self.allocator);
+    defer bits.deinit();
+    try self.walkNodeForCodes(
+        root,
+        &bits,
+        &codes_by_char,
+    );
+    return codes_by_char;
+}
+
+fn walkNodeForCodes(
+    self: *Self,
+    node: *const Node,
+    bits: *BitVec,
+    codes_by_char: *CodesByChar,
+) !void {
+    switch (node.*) {
+        .leaf => |leaf_node| {
+            const bits_copy = try bits.copy(self.allocator);
+            try codes_by_char.put(leaf_node.byte, bits_copy);
+        },
+        .internal => |internal_node| {
+            try bits.push(0);
+            try self.walkNodeForCodes(internal_node.left, bits, codes_by_char);
+            _ = bits.pop();
+
+            try bits.push(1);
+            try self.walkNodeForCodes(internal_node.right, bits, codes_by_char);
+            _ = bits.pop();
+        },
+    }
+}
+
+fn deinitCodesByChar(codes_by_char: *CodesByChar) void {
+    var it = codes_by_char.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.*.deinit();
+    }
+    codes_by_char.deinit();
+}
+
 test "walk tree" {
-    const s = "hello world";
-    var tree = try Tree.build(testing.allocator, s);
-    defer tree.deinit();
-    var codes_by_char = try tree.walkPathsForCodes();
-    defer Tree.deinitCodesByChar(&codes_by_char);
+    var encoder = Self.init(testing.allocator, test_input);
+    var root = try encoder.buildTree();
+    defer root.deinit(testing.allocator);
+
+    var codes_by_char = try encoder.walkPathsForCodes(root);
+    defer deinitCodesByChar(&codes_by_char);
+
     var codes_it = codes_by_char.iterator();
     while (codes_it.next()) |entry| {
         const c = entry.key_ptr.*;
-        var bv = Tree.BitVec.init(testing.allocator);
+        var bv = BitVec.init(testing.allocator);
         defer bv.deinit();
         try bv.pushByte(c);
         var it = bv.iterator();
@@ -277,19 +292,4 @@ test "walk tree" {
         }
         std.debug.print("\n", .{});
     }
-}
-
-test "encode bytes" {
-    const s = "hello world";
-    var tree = try Tree.build(testing.allocator, s);
-    defer tree.deinit();
-
-    var bits = Tree.BitVec.init(testing.allocator);
-    defer bits.deinit();
-    try tree.encodeBytes(s, &bits);
-    var bit = bits.iterator();
-    while (bit.next()) |b| {
-        std.debug.print("{d}", .{b});
-    }
-    std.debug.print("\n", .{});
 }
