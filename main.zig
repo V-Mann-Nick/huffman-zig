@@ -14,7 +14,7 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    if (args.len != 3) {
+    if (args.len < 2) {
         return HuffmanError.InvalidArgs;
     }
 
@@ -22,11 +22,20 @@ pub fn main() !void {
     const op: Op = std.meta.stringToEnum(Op, args[1]) orelse {
         return HuffmanError.InvalidArgs;
     };
-    const input_path = args[2];
+    const input_path: ?[]u8 = if (args.len > 2) args[2] else null;
+
+    const file = if (input_path == null or std.mem.eql(u8, input_path.?, "-"))
+        std.io.getStdIn()
+    else
+        try std.fs.cwd().openFile(input_path.?, .{});
+    defer file.close();
+
+    const stdout = std.io.getStdOut();
+    defer stdout.close();
 
     switch (op) {
-        .encode => try encode(allocator, input_path),
-        .decode => try decode(allocator, input_path),
+        .encode => try encode(allocator, file, stdout),
+        .decode => try decode(allocator, file, stdout),
     }
 
     const end = std.time.milliTimestamp();
@@ -34,41 +43,30 @@ pub fn main() !void {
     std.debug.print("Execution time: {} ms\n", .{duration});
 }
 
-fn encode(allocator: Allocator, file_name: []const u8) !void {
-    const cwd = std.fs.cwd();
-    const file = try cwd.openFile(file_name, .{});
-    defer file.close();
+fn encode(
+    allocator: Allocator,
+    file: std.fs.File,
+    stdout: std.fs.File,
+) !void {
     const input = try file.readToEndAlloc(allocator, 1e9);
 
     var encoder = Encoder.init(allocator, input);
     var encoded = try encoder.encode();
     defer encoded.deinit();
 
-    const new_file_name = try std.fmt.allocPrint(allocator, "{s}.huf", .{file_name});
-    const write_file = try cwd.createFile(new_file_name, .{});
-    defer write_file.close();
-    try write_file.writeAll(encoded.bytes.items);
+    try stdout.writeAll(encoded.bytes.items);
 }
 
-fn decode(allocator: Allocator, file_name: []const u8) !void {
-    const cwd = std.fs.cwd();
-    const file = try cwd.openFile(file_name, .{});
-    defer file.close();
+fn decode(
+    allocator: Allocator,
+    file: std.fs.File,
+    stdout: std.fs.File,
+) !void {
     const input = try file.readToEndAlloc(allocator, 1e9);
 
     var decoder = Decoder.init(allocator, input);
     var bytes = try decoder.decode();
     defer bytes.deinit();
 
-    const new_file_name = try std.mem.replaceOwned(
-        u8,
-        allocator,
-        file_name,
-        ".huf",
-        ".dec",
-    );
-    defer allocator.free(new_file_name);
-    const write_file = try cwd.createFile(new_file_name, .{});
-    defer write_file.close();
-    try write_file.writeAll(bytes.items);
+    try stdout.writeAll(bytes.items);
 }
