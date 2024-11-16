@@ -101,7 +101,7 @@ test "parse tree" {
     var bitvec = BitVec.init(testing.allocator);
     defer bitvec.deinit();
     for (serialized_tree) |byte| {
-        try bitvec.pushByte(byte);
+        try bitvec.pushBits(8, byte);
     }
     var it = bitvec.iterator();
 

@@ -51,24 +51,14 @@ pub fn push(self: *BitVec, b: u1) !void {
     self.bit_len += 1;
 }
 
-pub fn pushByte(self: *BitVec, byte: u8) !void {
-    var i: u3 = 0;
+pub fn pushBits(self: *BitVec, comptime n: comptime_int, v: uint(n)) !void {
+    const max_i: uint(n) = n - 1;
+    const i_bits = n - @clz(max_i);
+    var i: uint(i_bits) = 0;
     while (true) {
-        const bit = @as(u1, @intCast((byte >> i) & 1));
+        const bit = @as(u1, @intCast((v >> i) & 1));
         try self.push(bit);
-        if (i == 7) {
-            break;
-        }
-        i += 1;
-    }
-}
-
-pub fn pushU64(self: *BitVec, n: u64) !void {
-    var i: u6 = 0;
-    while (true) {
-        const bit = @as(u1, @intCast((n >> i) & 1));
-        try self.push(bit);
-        if (i == 63) {
+        if (i == max_i) {
             break;
         }
         i += 1;
@@ -130,13 +120,6 @@ pub const Iterator = struct {
         return b;
     }
 
-    fn uint(comptime b: comptime_int) type {
-        const Signedness = std.builtin.Signedness;
-        return @Type(.{
-            .Int = .{ .signedness = Signedness.unsigned, .bits = b },
-        });
-    }
-
     pub fn take(self: *Iterator, comptime n: comptime_int) error{OutOfBits}!uint(n) {
         const max_shift: uint(n) = n - 1;
         const shift_int_bits = n - @clz(max_shift);
@@ -160,6 +143,13 @@ pub const Iterator = struct {
         self.idx = 0;
     }
 };
+
+fn uint(comptime b: comptime_int) type {
+    const Signedness = std.builtin.Signedness;
+    return @Type(.{
+        .Int = .{ .signedness = Signedness.unsigned, .bits = b },
+    });
+}
 
 const testing = std.testing;
 
@@ -197,7 +187,7 @@ test "push byte" {
     var bits = try createTestBitVec();
     defer bits.deinit();
 
-    try bits.pushByte(0b11_01_01_11);
+    try bits.pushBits(8, 0b11_01_01_11);
 
     try testing.expectEqual(1, bits.pop());
     try testing.expectEqual(1, bits.pop());

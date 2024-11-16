@@ -56,7 +56,7 @@ test "encode" {
 
 fn addHeader(self: *Self, bits: *BitVec) !void {
     const length: u64 = self.input.len;
-    try bits.pushU64(length);
+    try bits.pushBits(64, length);
 }
 
 fn buildTree(self: *Self) !*const Node {
@@ -175,7 +175,7 @@ fn serializeNode(node: *const Node, bits: *BitVec) !void {
     switch (node.*) {
         .leaf => |leaf_node| {
             try bits.push(1);
-            try bits.pushByte(leaf_node.byte);
+            try bits.pushBits(8, leaf_node.byte);
         },
         .internal => |internal_node| {
             try bits.push(0);
@@ -285,7 +285,7 @@ test "walk tree" {
         const c = entry.key_ptr.*;
         var bv = BitVec.init(testing.allocator);
         defer bv.deinit();
-        try bv.pushByte(c);
+        try bv.pushBits(8, c);
         var it = bv.iterator();
         while (it.next()) |bit| {
             std.debug.print("{d}", .{bit});
