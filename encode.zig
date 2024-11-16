@@ -35,6 +35,7 @@ pub fn encode(self: *Self) !BitVec {
     defer root.deinit(self.allocator);
 
     var bits = BitVec.init(self.allocator);
+    try self.addHeader(&bits);
     try serializeTree(root, &bits);
     try self.encodeBytes(root, &bits);
 
@@ -51,6 +52,11 @@ test "encode" {
         std.debug.print("{d}", .{b});
     }
     std.debug.print("\n", .{});
+}
+
+fn addHeader(self: *Self, bits: *BitVec) !void {
+    const length: u64 = self.input.len;
+    try bits.pushU64(length);
 }
 
 fn buildTree(self: *Self) !*const Node {
@@ -188,6 +194,7 @@ test "serialize tree" {
     try serializeTree(root, &bits);
     defer bits.deinit();
 
+    std.debug.print("Serialized Tree: ", .{});
     var it = bits.iterator();
     while (it.next()) |b| {
         std.debug.print("{d}", .{b});

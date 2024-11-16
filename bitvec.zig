@@ -52,11 +52,26 @@ pub fn push(self: *BitVec, b: u1) !void {
 }
 
 pub fn pushByte(self: *BitVec, byte: u8) !void {
-    var i: u4 = 0;
-    while (i < 8) : (i += 1) {
-        const shift = @as(u3, @intCast(i));
-        const bit = @as(u1, @intCast((byte >> shift) & 1));
+    var i: u3 = 0;
+    while (true) {
+        const bit = @as(u1, @intCast((byte >> i) & 1));
         try self.push(bit);
+        if (i == 7) {
+            break;
+        }
+        i += 1;
+    }
+}
+
+pub fn pushU64(self: *BitVec, n: u64) !void {
+    var i: u6 = 0;
+    while (true) {
+        const bit = @as(u1, @intCast((n >> i) & 1));
+        try self.push(bit);
+        if (i == 63) {
+            break;
+        }
+        i += 1;
     }
 }
 
@@ -98,7 +113,7 @@ pub fn iterator(self: *const BitVec) Iterator {
     return Iterator.init(self);
 }
 
-const Iterator = struct {
+pub const Iterator = struct {
     bit_vec: *const BitVec,
     idx: usize,
 
@@ -113,6 +128,32 @@ const Iterator = struct {
         const b = self.bit_vec.get(self.idx);
         self.idx += 1;
         return b;
+    }
+
+    fn uint(comptime b: comptime_int) type {
+        const Signedness = std.builtin.Signedness;
+        return @Type(.{
+            .Int = .{ .signedness = Signedness.unsigned, .bits = b },
+        });
+    }
+
+    pub fn take(self: *Iterator, comptime n: comptime_int) error{OutOfBits}!uint(n) {
+        const max_shift: uint(n) = n - 1;
+        const shift_int_bits = n - @clz(max_shift);
+        var shift: uint(shift_int_bits) = 0;
+        var bits: uint(n) = 0;
+        while (true) {
+            const bit = self.next() orelse {
+                return error.OutOfBits;
+            };
+            bits &= ~(@as(uint(n), 1) << shift);
+            bits |= @as(uint(n), bit) << shift;
+            if (shift == max_shift) {
+                break;
+            }
+            shift += 1;
+        }
+        return bits;
     }
 
     pub fn reset(self: *Iterator) void {
@@ -179,6 +220,15 @@ test "iterator" {
     try testing.expectEqual(0, it.next());
     try testing.expectEqual(1, it.next());
     try testing.expectEqual(null, it.next());
+}
+
+test "iterator take" {
+    var bits = try createTestBitVec();
+    defer bits.deinit();
+
+    var it = bits.iterator();
+    const i = try it.take(4);
+    std.debug.print("{b}", .{i});
 }
 
 test "append" {
