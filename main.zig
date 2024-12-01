@@ -49,6 +49,7 @@ fn encode(
     stdout: std.fs.File,
 ) !void {
     const input = try file.readToEndAlloc(allocator, 1e9);
+    defer allocator.free(input);
 
     var encoder = Encoder.init(allocator, input);
     var encoded = try encoder.encode();
@@ -63,6 +64,7 @@ fn decode(
     stdout: std.fs.File,
 ) !void {
     const input = try file.readToEndAlloc(allocator, 1e9);
+    defer allocator.free(input);
 
     var decoder = Decoder.init(allocator, input);
     var bytes = try decoder.decode();
